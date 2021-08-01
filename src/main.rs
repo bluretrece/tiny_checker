@@ -45,6 +45,20 @@ impl Context {
                 }
             }
 
+            Term::TmIf(ref t1, t2, t3) => {
+                let ty1 = self.type_of(*t1.clone())?;
+                let type_of_t1 = ty1.clone();
+
+                assert_eq!(type_of_t1, Type::TyBool);
+
+                let ty2 = self.type_of(*t2)?;
+                let ty3 = self.type_of(*t3)?;
+
+                assert_eq!(ty2, ty3);
+
+                return Ok(ty2);
+            }
+
             Term::TmApp(t1, t2) => {
                 let ty1 = self.type_of(*t1)?;
                 let ty2 = self.type_of(*t2)?;
@@ -73,34 +87,102 @@ impl Context {
                 }
                 Err(String::from("Types do not match"))
             }
-            _ => unreachable!(),
         }
     }
 }
 
-fn main() {
-    let tmidbool = Term::TmAbs(
-        "x".to_owned(),
-        Type::TyBool,
-        Box::new(Term::TmVar(String::from("x"))),
-    );
+fn main() {}
 
-    let tmadd = Term::TmAbs(
-        "x".to_owned(),
-        Type::TyInt,
-        Box::new(Term::TmAbs(
-            "y".to_owned(),
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn term_is_unbounded() {
+        let mut ctx = Context(std::collections::HashMap::new());
+        let termvar = Term::TmVar("x".to_owned());
+
+        let type_check = ctx.type_of(termvar);
+        assert_eq!(type_check, Err(String::from("Unbounded variable")));
+    }
+
+    #[test]
+    fn type_is_int() {
+        let mut ctx = Context(std::collections::HashMap::new());
+        let termvar = Term::TmVar("x".to_owned());
+        ctx.0.insert("x".to_owned(), Type::TyInt);
+
+        let type_check = ctx.type_of(termvar);
+        assert_eq!(type_check, Ok(Type::TyInt));
+    }
+
+    #[test]
+    fn add() {
+        let tmadd = Term::TmAbs(
+            "x".to_owned(),
             Type::TyInt,
-            Box::new(Term::TmAdd(
-                Box::new(Term::TmVar("x".to_owned())),
-                Box::new(Term::TmVar("y".to_owned())),
+            Box::new(Term::TmAbs(
+                "y".to_owned(),
+                Type::TyInt,
+                Box::new(Term::TmAdd(
+                    Box::new(Term::TmVar("x".to_owned())),
+                    Box::new(Term::TmVar("y".to_owned())),
+                )),
             )),
-        )),
-    );
+        );
 
-    // let mut ctx = Context(std::collections::HashMap::new());
-    let mut ctx = Context(std::collections::HashMap::new());
+        let mut ctx = Context(std::collections::HashMap::new());
+        let ctx1 = ctx.type_of(tmadd);
 
-    let int_term = Term::TmVar("x".to_owned());
-    println!("{:?}", ctx.type_of(tmadd));
+        assert_eq!(
+            ctx1,
+            Ok(Type::TyFun(
+                Box::new(Type::TyInt),
+                Box::new(Type::TyFun(Box::new(Type::TyInt), Box::new(Type::TyInt)))
+            ))
+        );
+    }
+
+    #[test]
+    fn identity() {
+        let tmbool = Term::TmAbs(
+            "x".to_owned(),
+            Type::TyBool,
+            Box::new(Term::TmVar(String::from("x"))),
+        );
+        let mut ctx = Context(std::collections::HashMap::new());
+        let ctx1 = ctx.type_of(tmbool);
+
+        assert_eq!(
+            ctx1,
+            Ok(Type::TyFun(Box::new(Type::TyBool), Box::new(Type::TyBool)))
+        );
+    }
+
+    #[test]
+    fn int() {
+        let int = Term::TmInt(351);
+        let mut ctx = Context(std::collections::HashMap::new());
+        let ctx1 = ctx.type_of(int);
+
+        assert_eq!(ctx1, Ok(Type::TyInt));
+    }
+
+    #[test]
+    fn boolean() {
+        let btrue = Term::TmTrue;
+        let mut ctx = Context(std::collections::HashMap::new());
+        let ctx1 = ctx.type_of(btrue);
+
+        assert_eq!(ctx1, Ok(Type::TyBool));
+    }
+
+    #[test]
+    fn boolean_false() {
+        let bfalse = Term::TmFalse;
+        let mut ctx = Context(std::collections::HashMap::new());
+        let ctx1 = ctx.type_of(bfalse);
+
+        assert_eq!(ctx1, Ok(Type::TyBool));
+    }
 }
