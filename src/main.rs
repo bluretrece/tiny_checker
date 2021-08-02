@@ -20,16 +20,26 @@ pub enum Term {
 #[derive(Debug, PartialEq, Clone)]
 pub struct Context(std::collections::HashMap<String, Type>);
 
+impl std::fmt::Display for Type {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::TyBool => write!(f, "Bool"),
+            Self::TyInt => write!(f, "Int"),
+            Self::TyFun(a, b) => write!(f, "{} → {}", *a, *b),
+        }
+    }
+}
+
 impl Context {
     pub fn check(&mut self, t: &Term) -> bool {
-        let ty = self.type_of(t.clone()).unwrap();
+        let ty = self.type_of_term(t.clone()).unwrap();
         match ty {
             Type::TyInt => true,
             _ => false,
         }
     }
 
-    pub fn type_of(&mut self, t: Term) -> Result<Type, String> {
+    pub fn type_of_term(&mut self, t: Term) -> Result<Type, String> {
         match t {
             Term::TmTrue => Ok(Type::TyBool),
 
@@ -46,22 +56,23 @@ impl Context {
             }
 
             Term::TmIf(ref t1, t2, t3) => {
-                let ty1 = self.type_of(*t1.clone())?;
+                let ty1 = self.type_of_term(*t1.clone())?;
                 let type_of_t1 = ty1.clone();
 
                 assert_eq!(type_of_t1, Type::TyBool);
 
-                let ty2 = self.type_of(*t2)?;
-                let ty3 = self.type_of(*t3)?;
+                let ty2 = self.type_of_term(*t2)?;
+                let ty3 = self.type_of_term(*t3)?;
 
                 assert_eq!(ty2, ty3);
 
                 return Ok(ty2);
             }
+            
 
             Term::TmApp(t1, t2) => {
-                let ty1 = self.type_of(*t1)?;
-                let ty2 = self.type_of(*t2)?;
+                let ty1 = self.type_of_term(*t1)?;
+                let ty2 = self.type_of_term(*t2)?;
 
                 match ty1 {
                     Type::TyFun(ty11, ty12) => {
@@ -73,10 +84,9 @@ impl Context {
                     _ => unreachable!(),
                 }
             }
-
             Term::TmAbs(x, ref ty, t) => {
                 self.0.insert(x, ty.clone());
-                let tyy = self.type_of(*t)?;
+                let tyy = self.type_of_term(*t)?;
 
                 Ok(Type::TyFun(Box::new(ty.clone()), Box::new(tyy)))
             }
@@ -102,7 +112,7 @@ mod tests {
         let mut ctx = Context(std::collections::HashMap::new());
         let termvar = Term::TmVar("x".to_owned());
 
-        let type_check = ctx.type_of(termvar);
+        let type_check = ctx.type_of_term(termvar);
         assert_eq!(type_check, Err(String::from("Unbounded variable")));
     }
 
@@ -112,7 +122,7 @@ mod tests {
         let termvar = Term::TmVar("x".to_owned());
         ctx.0.insert("x".to_owned(), Type::TyInt);
 
-        let type_check = ctx.type_of(termvar);
+        let type_check = ctx.type_of_term(termvar);
         assert_eq!(type_check, Ok(Type::TyInt));
     }
 
@@ -132,7 +142,7 @@ mod tests {
         );
 
         let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of(tmadd);
+        let ctx1 = ctx.type_of_term(tmadd);
 
         assert_eq!(
             ctx1,
@@ -151,7 +161,7 @@ mod tests {
             Box::new(Term::TmVar(String::from("x"))),
         );
         let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of(tmbool);
+        let ctx1 = ctx.type_of_term(tmbool);
 
         assert_eq!(
             ctx1,
@@ -163,7 +173,7 @@ mod tests {
     fn int() {
         let int = Term::TmInt(351);
         let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of(int);
+        let ctx1 = ctx.type_of_term(int);
 
         assert_eq!(ctx1, Ok(Type::TyInt));
     }
@@ -172,7 +182,7 @@ mod tests {
     fn boolean() {
         let btrue = Term::TmTrue;
         let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of(btrue);
+        let ctx1 = ctx.type_of_term(btrue);
 
         assert_eq!(ctx1, Ok(Type::TyBool));
     }
@@ -181,7 +191,7 @@ mod tests {
     fn boolean_false() {
         let bfalse = Term::TmFalse;
         let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of(bfalse);
+        let ctx1 = ctx.type_of_term(bfalse);
 
         assert_eq!(ctx1, Ok(Type::TyBool));
     }
