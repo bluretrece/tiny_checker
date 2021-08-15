@@ -68,7 +68,6 @@ impl Context {
 
                 return Ok(ty2);
             }
-            
 
             Term::TmApp(t1, t2) => {
                 let ty1 = self.type_of_term(*t1)?;
@@ -84,6 +83,7 @@ impl Context {
                     _ => unreachable!(),
                 }
             }
+
             Term::TmAbs(x, ref ty, t) => {
                 self.0.insert(x, ty.clone());
                 let tyy = self.type_of_term(*t)?;
@@ -101,7 +101,14 @@ impl Context {
     }
 }
 
-fn main() {}
+fn main() {
+    let mut ctx = Context(std::collections::HashMap::new());
+    let term = Term::TmAbs("f".to_owned(), 
+        Type::TyFun(Box::new(Type::TyBool),Box::new(Type::TyInt)), 
+        Box::new(Term::TmVar("f".to_owned())));
+    let type_check = ctx.type_of_term(term).unwrap();
+    println!("{}", type_check);
+}
 
 #[cfg(test)]
 mod tests {
