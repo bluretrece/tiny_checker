@@ -1,8 +1,79 @@
+use std::collections::HashMap;
+use std::hash::Hash;
+
+#[derive(Debug, PartialEq, Clone)]
+pub enum Polytype {
+    ForAll(Vec<String>, Type),
+}
+
 #[derive(Debug, PartialEq, Clone)]
 pub enum Type {
+    TyVar(String), // TyVar struct perhaps?
     TyFun(Box<Type>, Box<Type>),
     TyBool,
     TyInt,
+}
+
+pub fn bind(name: String, t: Type) -> Subst {
+    let t_name = match t {
+        x @ Type::TyVar(v) => v,
+        _ => unreachable!()
+    };
+
+    if name == t_name { 
+        Subst::new() 
+    } else if occurs_in(t, name) {
+        String::from("Infinite type");
+        unimplemented!()
+    } else {
+        let mut subst = Subst::new();
+        subst.0.insert(name, t);
+        subst
+    }
+}
+
+pub fn occurs_in(t: Type, name: String) -> bool {
+    match t {
+        Type::TyBool => false,
+        Type::TyInt => false,
+        Type::TyVar(y) => return y == name,
+        Type::TyFun(t1, t2) => occurs_in(*t1, name) || occurs_in(*t2, name)
+    }
+}
+
+impl Type {
+    pub fn unify(&self, t2: &Type) -> Subst {
+        match (self, t2) {
+            (Type::TyBool, Type::TyBool) => Subst::new(),
+            (t1, Type::TyVar(x)) => bind(x.to_owned(), *t1),
+            (Type::TyVar(x), t2) => bind(x.to_owned(), *t2),
+            (Type::TyInt, Type::TyInt) => Subst::new(),
+            (Type::TyFun(ref in1, ref out1), Type::TyFun(ref in2, ref out2)) => {
+                let s1 = in1.unify(&*in2);
+                let s2 = out1.subst_type(&s1).unify(&out2.subst_type(&s1));
+
+                s1.compose_subst(s2)
+            }
+        }
+    }
+
+    pub fn subst_type(&self, s: &Subst) -> Type {
+        match self {
+            Type::TyVar(ref x) => {
+                s.0.get(x).cloned().unwrap_or(self.clone())
+                // if self.0.contains_key(x) {
+                //     self.0.get(x).unwrap().clone()
+                // } else {
+                //     t.clone()
+                // }
+            }
+            Type::TyFun(t1, t2) => {
+                Type::TyFun(Box::new(t1.subst_type(s)), Box::new(t2.subst_type(s)))
+            }
+            Type::TyBool => self.clone(),
+            Type::TyInt => self.clone(),
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -11,7 +82,7 @@ pub enum Term {
     TmFalse,
     TmInt(i32),
     TmVar(String),
-    TmAbs(String, Type, Box<Term>),
+    TmAbs(String, Box<Term>),
     TmApp(Box<Term>, Box<Term>),
     TmAdd(Box<Term>, Box<Term>),
     TmIf(Box<Term>, Box<Term>, Box<Term>),
@@ -26,6 +97,7 @@ impl std::fmt::Display for Type {
             Self::TyBool => write!(f, "Bool"),
             Self::TyInt => write!(f, "Int"),
             Self::TyFun(a, b) => write!(f, "{} → {}", *a, *b),
+            Self::TyVar(tv) => write!(f, "{}", tv),
         }
     }
 }
@@ -101,13 +173,69 @@ impl Context {
     }
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub struct Subst(HashMap<String, Type>);
+
+trait Union {
+    fn union(&self, other: &Self) -> Self;
+}
+
+impl<K, V> Union for HashMap<K, V>
+where
+    K: Clone + Eq + Hash,
+    V: Clone,
+{
+    fn union(&self, other: &Self) -> Self {
+        let mut res = self.clone();
+        for (key, value) in other {
+            res.entry(key.clone()).or_insert(value.clone());
+        }
+
+        res
+    }
+}
+
+impl Subst {
+    pub fn new() -> Self {
+        Self(HashMap::new())
+    }
+
+    pub fn compose_subst(&self, s2: Subst) -> Subst {
+        Subst(
+            self.0.union(
+                &s2.0
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.subst_type(self)))
+                    .collect(),
+            ),
+        )
+    }
+}
+
+/// \forall X. X -> X
+pub fn ty_id() -> Polytype {
+    Polytype::ForAll(
+        vec![String::from("X")],
+        Type::TyFun(
+            Box::new(Type::TyVar("X".to_owned())),
+            Box::new(Type::TyVar("X".to_owned())),
+        ),
+    )
+}
+
+pub fn tm_id() -> Term {
+    Term::TmAbs("x".to_owned(), Box::new(Term::TmVar("x".to_owned())))
+}
+
 fn main() {
-    let mut ctx = Context(std::collections::HashMap::new());
-    let term = Term::TmAbs("f".to_owned(), 
-        Type::TyFun(Box::new(Type::TyBool),Box::new(Type::TyInt)), 
-        Box::new(Term::TmVar("f".to_owned())));
-    let type_check = ctx.type_of_term(term).unwrap();
-    println!("{}", type_check);
+    // let mut ctx = Context(std::collections::HashMap::new());
+    // let term = Term::TmAbs(
+    //     "f".to_owned(),
+    //     Type::TyFun(Box::new(Type::TyBool), Box::new(Type::TyInt)),
+    //     Box::new(Term::TmVar("f".to_owned())),
+    // );
+    // let type_check = ctx.type_of_term(term).unwrap();
+    // println!("{}", type_check);
 }
 
 #[cfg(test)]
