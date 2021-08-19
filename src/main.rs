@@ -1,66 +1,111 @@
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::hash::Hash;
 
 #[derive(Debug, PartialEq, Clone)]
-pub enum Polytype {
-    ForAll(Vec<String>, Type),
+pub struct Polytype {
+    pub vars: Vec<TypeVar>,
+    pub ty: Type,
+}
+
+impl Polytype {
+    pub fn ftv(&self) -> HashSet<TypeVar> {
+        self.ty
+            .ftv()
+            .difference(&self.vars.iter().cloned().collect())
+            .cloned()
+            .collect()
+    }
+
+    pub fn instantiate(&self, tv: &mut TypeVarGen) -> Type {
+        let newvars = self.vars.iter().map(|_| Type::TyVar(tv.next()));
+        self.ty
+            .subst_type(&Subst(self.vars.iter().cloned().zip(newvars).collect()))
+    }
+}
+
+#[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
+pub struct TypeVar(usize);
+
+pub struct TypeVarGen {
+    supply: usize,
+}
+
+impl TypeVarGen {
+    pub fn new() -> Self {
+        Self { supply: 0 }
+    }
+
+    pub fn next(&mut self) -> TypeVar {
+        let v = TypeVar(self.supply);
+        self.supply += 1;
+        v
+    }
 }
 
 #[derive(Debug, PartialEq, Clone)]
 pub enum Type {
-    TyVar(String), // TyVar struct perhaps?
+    TyVar(TypeVar),
     TyFun(Box<Type>, Box<Type>),
     TyBool,
     TyInt,
 }
 
-pub fn bind(name: String, t: Type) -> Subst {
-    let t_name = match t {
-        x @ Type::TyVar(v) => v,
-        _ => unreachable!()
-    };
+impl TypeVar {
+    pub fn bind(&self, t: &Type) -> Subst {
+        if let &Type::TyVar(ref u) = t {
+            if u == self {
+                return Subst::new();
+            }
+        }
 
-    if name == t_name { 
-        Subst::new() 
-    } else if occurs_in(t, name) {
-        String::from("Infinite type");
-        unimplemented!()
-    } else {
-        let mut subst = Subst::new();
-        subst.0.insert(name, t);
-        subst
+        if occurs_in(t.clone(), self.0.to_string()) {
+            String::from("Infinite type");
+            unimplemented!()
+        } else {
+            let mut subst = Subst::new();
+            subst.0.insert(self.clone(), t.clone());
+            subst
+        }
     }
 }
-
 pub fn occurs_in(t: Type, name: String) -> bool {
     match t {
         Type::TyBool => false,
         Type::TyInt => false,
-        Type::TyVar(y) => return y == name,
-        Type::TyFun(t1, t2) => occurs_in(*t1, name) || occurs_in(*t2, name)
+        Type::TyVar(y) => return y.0.to_string() == name,
+        Type::TyFun(t1, t2) => occurs_in(*t1, name.clone()) || occurs_in(*t2, name.clone()),
     }
 }
 
 impl Type {
+    pub fn ftv(&self) -> HashSet<TypeVar> {
+        match self {
+            Type::TyBool | Type::TyInt => HashSet::new(),
+            Type::TyVar(ref x) => [x.clone()].iter().cloned().collect(),
+            Type::TyFun(ref x, ref y) => x.ftv().union(&y.ftv()).cloned().collect(),
+        }
+    }
     pub fn unify(&self, t2: &Type) -> Subst {
         match (self, t2) {
             (Type::TyBool, Type::TyBool) => Subst::new(),
-            (t1, Type::TyVar(x)) => bind(x.to_owned(), *t1),
-            (Type::TyVar(x), t2) => bind(x.to_owned(), *t2),
-            (Type::TyInt, Type::TyInt) => Subst::new(),
-            (Type::TyFun(ref in1, ref out1), Type::TyFun(ref in2, ref out2)) => {
+            (t1, &Type::TyVar(ref x)) => x.bind(&t1),
+            (&Type::TyVar(ref x), t2) => x.bind(&t2),
+            (&Type::TyInt, Type::TyInt) => Subst::new(),
+            (&Type::TyFun(ref in1, ref out1), Type::TyFun(ref in2, ref out2)) => {
                 let s1 = in1.unify(&*in2);
                 let s2 = out1.subst_type(&s1).unify(&out2.subst_type(&s1));
 
                 s1.compose_subst(s2)
             }
+            _ => unreachable!(), // Cannot unify!
         }
     }
 
     pub fn subst_type(&self, s: &Subst) -> Type {
         match self {
             Type::TyVar(ref x) => {
-                s.0.get(x).cloned().unwrap_or(self.clone())
+                s.0.get(&x).cloned().unwrap_or(self.clone())
                 // if self.0.contains_key(x) {
                 //     self.0.get(x).unwrap().clone()
                 // } else {
@@ -89,7 +134,7 @@ pub enum Term {
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Context(std::collections::HashMap<String, Type>);
+pub struct Context(std::collections::HashMap<String, Polytype>);
 
 impl std::fmt::Display for Type {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -97,84 +142,90 @@ impl std::fmt::Display for Type {
             Self::TyBool => write!(f, "Bool"),
             Self::TyInt => write!(f, "Int"),
             Self::TyFun(a, b) => write!(f, "{} → {}", *a, *b),
-            Self::TyVar(tv) => write!(f, "{}", tv),
+            Self::TyVar(tv) => write!(f, "{}", tv.0),
         }
     }
 }
 
 impl Context {
-    pub fn check(&mut self, t: &Term) -> bool {
-        let ty = self.type_of_term(t.clone()).unwrap();
-        match ty {
-            Type::TyInt => true,
-            _ => false,
-        }
-    }
+    // pub fn check(&mut self, t: &Term) -> bool {
+    //     let ty = self.type_of_term(t.clone()).unwrap();
+    //     match ty {
+    //         Type::TyInt => true,
+    //         _ => false,
+    //     }
+    // }
 
-    pub fn type_of_term(&mut self, t: Term) -> Result<Type, String> {
+    pub fn type_of_term(&mut self, t: Term, tvg: &mut TypeVarGen) -> Result<(Subst, Type), String> {
         match t {
-            Term::TmTrue => Ok(Type::TyBool),
+            Term::TmTrue | Term::TmFalse => Ok((Subst::new(), Type::TyBool)),
+            Term::TmInt(_) => Ok((Subst::new(), Type::TyInt)),
 
-            Term::TmFalse => Ok(Type::TyBool),
-
-            Term::TmInt(_) => Ok(Type::TyInt),
-
-            Term::TmVar(x) => {
-                if let Some(v) = self.0.get(&x) {
-                    return Ok(v.clone());
-                } else {
-                    Err(String::from("Unbounded variable"))
-                }
-            }
+            Term::TmVar(ref x) => match self.0.get(x) {
+                Some(s) => Ok((Subst::new(), s.instantiate(tvg))),
+                None => Err(String::from("Unbound variable")),
+            },
 
             Term::TmIf(ref t1, t2, t3) => {
-                let ty1 = self.type_of_term(*t1.clone())?;
-                let type_of_t1 = ty1.clone();
+                unimplemented!()
+                // let ty1 = self.type_of_term(*t1.clone())?;
+                // let type_of_t1 = ty1.clone();
 
-                assert_eq!(type_of_t1, Type::TyBool);
+                // assert_eq!(type_of_t1, Type::TyBool);
 
-                let ty2 = self.type_of_term(*t2)?;
-                let ty3 = self.type_of_term(*t3)?;
+                // let ty2 = self.type_of_term(*t2)?;
+                // let ty3 = self.type_of_term(*t3)?;
 
-                assert_eq!(ty2, ty3);
+                // assert_eq!(ty2, ty3);
 
-                return Ok(ty2);
+                // return Ok(ty2);
             }
 
             Term::TmApp(t1, t2) => {
-                let ty1 = self.type_of_term(*t1)?;
-                let ty2 = self.type_of_term(*t2)?;
+                let (s1, t1) = self.type_of_term(*t1, tvg)?;
+                let (s2, t2) = self.type_of_term(*t2, tvg)?;
+                let tv = Type::TyVar(tvg.next());
+                let s3 = t1
+                    .subst_type(&s2)
+                    .unify(&Type::TyFun(Box::new(t2), Box::new(tv.clone())));
 
-                match ty1 {
-                    Type::TyFun(ty11, ty12) => {
-                        if ty2 == *ty11 {
-                            return Ok(*ty12);
-                        }
-                        Err(String::from("Wront argument type"))
-                    }
-                    _ => unreachable!(),
-                }
+                Ok((s3.compose_subst(s2.compose_subst(s1)), tv.subst_type(&s3)))
             }
 
-            Term::TmAbs(x, ref ty, t) => {
-                self.0.insert(x, ty.clone());
-                let tyy = self.type_of_term(*t)?;
+            Term::TmAbs(ref x, t) => {
+                let tv = Type::TyVar(tvg.next());
+                let mut env = self.clone();
+                env.0.remove(x);
+                env.0.insert(
+                    x.clone(),
+                    Polytype {
+                        vars: Vec::new(),
+                        ty: tv.clone(),
+                    },
+                );
 
-                Ok(Type::TyFun(Box::new(ty.clone()), Box::new(tyy)))
+                let (s1, t1) = env.type_of_term(*t, tvg)?;
+                Ok((
+                    s1.clone(),
+                    Type::TyFun(Box::new(tv.subst_type(&s1)), Box::new(t1)),
+                ))
             }
 
-            Term::TmAdd(ref t1, ref t2) => {
-                if self.check(t1) && self.check(t2) {
-                    return Ok(Type::TyInt);
-                }
-                Err(String::from("Types do not match"))
+            Term::TmAdd(t1, t2) => {
+                unimplemented!()
+                // let (s1, t1) = self.type_of_term(*t1, tvg)?;
+                // let (s2, t2) = self.type_of_term(*t2, tvg)?;
+
+                // let tt = t1.unify(&t2);
+
+                // Ok((tt.compose_subst(s2), ))
             }
         }
     }
 }
 
 #[derive(Debug, PartialEq, Clone)]
-pub struct Subst(HashMap<String, Type>);
+pub struct Subst(HashMap<TypeVar, Type>);
 
 trait Union {
     fn union(&self, other: &Self) -> Self;
@@ -213,121 +264,100 @@ impl Subst {
 }
 
 /// \forall X. X -> X
-pub fn ty_id() -> Polytype {
-    Polytype::ForAll(
-        vec![String::from("X")],
-        Type::TyFun(
-            Box::new(Type::TyVar("X".to_owned())),
-            Box::new(Type::TyVar("X".to_owned())),
-        ),
-    )
-}
+// pub fn ty_id() -> Polytype {
+//     Polytype {
+//         vars: vec![],
+//         ty: Type::TyFun(
+//             Box::new(Type::TyVar("X".to_owned())),
+//             Box::new(Type::TyVar("X".to_owned())),
+//         ),
+//     }
+// }
 
 pub fn tm_id() -> Term {
     Term::TmAbs("x".to_owned(), Box::new(Term::TmVar("x".to_owned())))
 }
 
 fn main() {
-    // let mut ctx = Context(std::collections::HashMap::new());
-    // let term = Term::TmAbs(
-    //     "f".to_owned(),
-    //     Type::TyFun(Box::new(Type::TyBool), Box::new(Type::TyInt)),
-    //     Box::new(Term::TmVar("f".to_owned())),
-    // );
-    // let type_check = ctx.type_of_term(term).unwrap();
-    // println!("{}", type_check);
+    let termvar = app(
+        app(Term::TmVar("+".to_string()), Term::TmInt(2)),
+        Term::TmTrue,
+    );
+    let mut env = Context(HashMap::new());
+    let mut tv = TypeVarGen::new();
+    env.0.insert(
+        "+".to_owned(),
+        Polytype {
+            vars: Vec::new(),
+            ty: Type::TyFun(
+                Box::new(Type::TyInt),
+                Box::new(Type::TyFun(Box::new(Type::TyInt), Box::new(Type::TyInt))),
+            ),
+        },
+    );
+
+    let (_, type_check) = env.type_of_term(termvar, &mut tv).unwrap();
+    println!("{:?}", type_check);
+}
+
+pub fn app(e1: Term, e2: Term) -> Term {
+    Term::TmApp(Box::new(e1), Box::new(e2))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn term_is_unbounded() {
-        let mut ctx = Context(std::collections::HashMap::new());
-        let termvar = Term::TmVar("x".to_owned());
-
-        let type_check = ctx.type_of_term(termvar);
-        assert_eq!(type_check, Err(String::from("Unbounded variable")));
-    }
-
-    #[test]
-    fn type_is_int() {
-        let mut ctx = Context(std::collections::HashMap::new());
-        let termvar = Term::TmVar("x".to_owned());
-        ctx.0.insert("x".to_owned(), Type::TyInt);
-
-        let type_check = ctx.type_of_term(termvar);
-        assert_eq!(type_check, Ok(Type::TyInt));
-    }
-
-    #[test]
-    fn add() {
-        let tmadd = Term::TmAbs(
-            "x".to_owned(),
-            Type::TyInt,
-            Box::new(Term::TmAbs(
-                "y".to_owned(),
-                Type::TyInt,
-                Box::new(Term::TmAdd(
-                    Box::new(Term::TmVar("x".to_owned())),
-                    Box::new(Term::TmVar("y".to_owned())),
-                )),
-            )),
-        );
-
-        let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of_term(tmadd);
-
-        assert_eq!(
-            ctx1,
-            Ok(Type::TyFun(
-                Box::new(Type::TyInt),
-                Box::new(Type::TyFun(Box::new(Type::TyInt), Box::new(Type::TyInt)))
-            ))
-        );
-    }
-
-    #[test]
-    fn identity() {
-        let tmbool = Term::TmAbs(
-            "x".to_owned(),
-            Type::TyBool,
-            Box::new(Term::TmVar(String::from("x"))),
-        );
-        let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of_term(tmbool);
-
-        assert_eq!(
-            ctx1,
-            Ok(Type::TyFun(Box::new(Type::TyBool), Box::new(Type::TyBool)))
-        );
-    }
-
-    #[test]
-    fn int() {
-        let int = Term::TmInt(351);
-        let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of_term(int);
-
-        assert_eq!(ctx1, Ok(Type::TyInt));
-    }
-
+    #[ignore]
     #[test]
     fn boolean() {
-        let btrue = Term::TmTrue;
-        let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of_term(btrue);
+        let termvar = Term::TmTrue;
+        let mut env = Context(HashMap::new());
+        let mut tv = TypeVarGen::new();
 
-        assert_eq!(ctx1, Ok(Type::TyBool));
+        let (_, type_check) = env.type_of_term(termvar, &mut tv).unwrap();
+        println!("{:?}", type_check);
+        assert_eq!(type_check, Type::TyBool);
     }
 
     #[test]
-    fn boolean_false() {
-        let bfalse = Term::TmFalse;
-        let mut ctx = Context(std::collections::HashMap::new());
-        let ctx1 = ctx.type_of_term(bfalse);
+    fn add_fun() {
+        let termvar = app(
+            app(Term::TmVar("+".to_string()), Term::TmInt(2)),
+            Term::TmInt(4),
+        );
+        let mut env = Context(HashMap::new());
+        let mut tv = TypeVarGen::new();
+        // env.insert("+".to_owned(),
+        //        Polytype {
+        //            vars: Vec::new(),
+        //            ty: Type::TyFun(Box::new(Type::TyInt), Box::new(TyFun(Box::new(Type::TyInt), Box::new(Type::TyInt)))),
+        //        });
 
-        assert_eq!(ctx1, Ok(Type::TyBool));
+        let (_, type_check) = env.type_of_term(termvar, &mut tv).unwrap();
+        println!("{:?}", type_check);
+        assert_eq!(type_check, Type::TyInt);
+    }
+    #[ignore]
+    #[test]
+    fn int() {
+        let termvar = Term::TmInt(5);
+        let mut env = Context(HashMap::new());
+        let mut tv = TypeVarGen::new();
+
+        let (_, type_check) = env.type_of_term(termvar, &mut tv).unwrap();
+        println!("{:?}", type_check);
+        assert_eq!(type_check, Type::TyInt);
+    }
+    #[ignore]
+    #[test]
+    fn term_is_unbounded() {
+        let termvar = Term::TmVar("x".to_owned());
+        let mut env = Context(HashMap::new());
+        let mut tv = TypeVarGen::new();
+
+        let type_check = env.type_of_term(termvar, &mut tv);
+        println!("{:?}", type_check);
+        assert_eq!(type_check, Err(String::from("Unbound variable")));
     }
 }
