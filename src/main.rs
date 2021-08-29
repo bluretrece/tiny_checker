@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::collections::HashSet;
+use std::fmt;
 use std::hash::Hash;
 
 #[derive(Debug, PartialEq, Clone)]
@@ -8,15 +9,17 @@ pub struct Polytype {
     pub ty: Type,
 }
 
-impl Polytype {
-    pub fn ftv(&self) -> HashSet<TypeVar> {
+impl Types for Polytype {
+    fn ftv(&self) -> HashSet<TypeVar> {
         self.ty
             .ftv()
             .difference(&self.vars.iter().cloned().collect())
             .cloned()
             .collect()
     }
+}
 
+impl Polytype {
     pub fn instantiate(&self, tv: &mut TypeVarGen) -> Type {
         let newvars = self.vars.iter().map(|_| Type::TyVar(tv.next()));
         self.ty
@@ -26,6 +29,12 @@ impl Polytype {
 
 #[derive(Debug, Clone, Copy, Eq, PartialEq, Hash)]
 pub struct TypeVar(usize);
+
+impl fmt::Display for TypeVar {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "'t{}", self.0)
+    }
+}
 
 pub struct TypeVarGen {
     supply: usize,
@@ -78,6 +87,21 @@ pub fn occurs_in(t: Type, name: String) -> bool {
     }
 }
 
+trait Types {
+    fn ftv(&self) -> HashSet<TypeVar>;
+}
+
+impl<'a, T> Types for Vec<T>
+where
+    T: Types,
+{
+    fn ftv(&self) -> HashSet<TypeVar> {
+        self.iter()
+            .map(|x| x.ftv())
+            .fold(HashSet::new(), |set, x| set.union(&x).cloned().collect())
+    }
+}
+
 impl Type {
     pub fn ftv(&self) -> HashSet<TypeVar> {
         match self {
@@ -104,14 +128,7 @@ impl Type {
 
     pub fn subst_type(&self, s: &Subst) -> Type {
         match self {
-            Type::TyVar(ref x) => {
-                s.0.get(&x).cloned().unwrap_or(self.clone())
-                // if self.0.contains_key(x) {
-                //     self.0.get(x).unwrap().clone()
-                // } else {
-                //     t.clone()
-                // }
-            }
+            Type::TyVar(ref x) => s.0.get(&x).cloned().unwrap_or(self.clone()),
             Type::TyFun(t1, t2) => {
                 Type::TyFun(Box::new(t1.subst_type(s)), Box::new(t2.subst_type(s)))
             }
@@ -133,6 +150,7 @@ pub enum Term {
     TmIf(Box<Term>, Box<Term>, Box<Term>),
 }
 
+/// Also known in other literature as Environment.
 #[derive(Debug, PartialEq, Clone)]
 pub struct Context(std::collections::HashMap<String, Polytype>);
 
@@ -141,20 +159,36 @@ impl std::fmt::Display for Type {
         match self {
             Self::TyBool => write!(f, "Bool"),
             Self::TyInt => write!(f, "Int"),
-            Self::TyFun(a, b) => write!(f, "{} → {}", *a, *b),
-            Self::TyVar(tv) => write!(f, "{}", tv.0),
+            Self::TyFun(a, b) => write!(f, "forall{}.{} → {}", *a.clone(), *a, *b),
+            Self::TyVar(tv) => write!(f, "{}", tv),
         }
     }
 }
 
+pub struct Error {
+    msg: String,
+}
+
+impl Error {
+    fn new(msg: String) -> Error {
+        Error { msg }
+    }
+}
+
+impl std::fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.msg)
+    }
+}
+
 impl Context {
-    // pub fn check(&mut self, t: &Term) -> bool {
-    //     let ty = self.type_of_term(t.clone()).unwrap();
-    //     match ty {
-    //         Type::TyInt => true,
-    //         _ => false,
-    //     }
-    // }
+    pub fn ftv(&self) -> HashSet<TypeVar> {
+        self.0
+            .values()
+            .map(|x| x.clone())
+            .collect::<Vec<Polytype>>()
+            .ftv()
+    }
 
     pub fn type_of_term(&mut self, t: Term, tvg: &mut TypeVarGen) -> Result<(Subst, Type), String> {
         match t {
@@ -163,7 +197,7 @@ impl Context {
 
             Term::TmVar(ref x) => match self.0.get(x) {
                 Some(s) => Ok((Subst::new(), s.instantiate(tvg))),
-                None => Err(String::from("Unbound variable")),
+                None => Err(Error::new(format!("Unbound variable {}", x)).to_string()),
             },
 
             Term::TmIf(ref t1, t2, t3) => {
@@ -278,15 +312,22 @@ pub fn tm_id() -> Term {
     Term::TmAbs("x".to_owned(), Box::new(Term::TmVar("x".to_owned())))
 }
 
+pub fn ty_id() -> Polytype {
+    Polytype {
+        vars: vec![TypeVar(0)],
+        ty: Type::TyFun(
+            Box::new(Type::TyVar(TypeVar(0))),
+            Box::new(Type::TyVar(TypeVar(0))),
+        ),
+    }
+}
+
 fn main() {
-    let termvar = app(
-        app(Term::TmVar("+".to_string()), Term::TmInt(2)),
-        Term::TmTrue,
-    );
+    let termvar = app(app(Term::TmVar("+".into()), Term::TmInt(2)), Term::TmInt(4));
     let mut env = Context(HashMap::new());
     let mut tv = TypeVarGen::new();
     env.0.insert(
-        "+".to_owned(),
+        "+".into(),
         Polytype {
             vars: Vec::new(),
             ty: Type::TyFun(
@@ -296,8 +337,11 @@ fn main() {
         },
     );
 
-    let (_, type_check) = env.type_of_term(termvar, &mut tv).unwrap();
-    println!("{:?}", type_check);
+    let for_all = tm_id();
+    let poly_all = ty_id();
+
+    let (_, type_check) = env.type_of_term(for_all, &mut tv).unwrap();
+    println!("{}", type_check);
 }
 
 pub fn app(e1: Term, e2: Term) -> Term {
@@ -308,7 +352,7 @@ pub fn app(e1: Term, e2: Term) -> Term {
 mod tests {
     use super::*;
 
-    #[ignore]
+    // #[ignore]
     #[test]
     fn boolean() {
         let termvar = Term::TmTrue;
@@ -338,7 +382,7 @@ mod tests {
         println!("{:?}", type_check);
         assert_eq!(type_check, Type::TyInt);
     }
-    #[ignore]
+    // #[ignore]
     #[test]
     fn int() {
         let termvar = Term::TmInt(5);
@@ -349,7 +393,8 @@ mod tests {
         println!("{:?}", type_check);
         assert_eq!(type_check, Type::TyInt);
     }
-    #[ignore]
+
+    // #[ignore]
     #[test]
     fn term_is_unbounded() {
         let termvar = Term::TmVar("x".to_owned());
